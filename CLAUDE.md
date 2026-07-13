@@ -110,7 +110,7 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 | # | Decision            | What I chose | Why |
 |---|---------------------|--------------|-----|
 | 1 | Saga style          |              |     |
-| 2 | Inventory concurrency |            |     |
+| 2 | Inventory concurrency | `SELECT ... FOR UPDATE` row lock | Simple to reason about, strictly serializes concurrent reservations on the same SKU, stays entirely in MySQL — doesn't pull the Redis-authoritative question (Decision #3, Phase 5) forward |
 | 3 | Redis role          |              |     |
 | 4 | Idempotency         |              |     |
 | 5 | Kafka partition key |              |     |

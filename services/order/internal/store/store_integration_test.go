@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/oklog/ulid/v2"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -38,7 +39,8 @@ func TestCreateAndGetOrder(t *testing.T) {
 		{ProductID: "sku-2", Quantity: 1},
 	}
 
-	created, err := s.CreateOrder(ctx, "user-123", items)
+	orderID := ulid.Make().String()
+	created, err := s.CreateOrder(ctx, orderID, "user-123", items)
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}

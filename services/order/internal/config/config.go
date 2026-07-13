@@ -4,14 +4,16 @@ package config
 import "os"
 
 type Config struct {
-	GRPCAddr string
-	MySQLDSN string
+	GRPCAddr      string
+	MySQLDSN      string
+	InventoryAddr string
 }
 
 func Load() Config {
 	return Config{
-		GRPCAddr: getEnv("ORDER_GRPC_ADDR", ":50051"),
-		MySQLDSN: getEnv("ORDER_MYSQL_DSN", "root:root@tcp(localhost:3306)/order_db?parseTime=true"),
+		GRPCAddr:      getEnv("ORDER_GRPC_ADDR", ":50051"),
+		MySQLDSN:      getEnv("ORDER_MYSQL_DSN", "root:root@tcp(localhost:3306)/order_db?parseTime=true"),
+		InventoryAddr: getEnv("ORDER_INVENTORY_ADDR", "localhost:50052"),
 	}
 }
 

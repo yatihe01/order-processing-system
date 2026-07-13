@@ -1,4 +1,4 @@
-// Command order runs the Order service: a gRPC server backed by MySQL.
+// Command inventory runs the Inventory service: a gRPC server backed by MySQL.
 package main
 
 import (
@@ -11,14 +11,12 @@ import (
 	"time"
 
 	inventoryv1 "orderproc/proto/gen/inventory/v1"
-	orderv1 "orderproc/proto/gen/order/v1"
-	"orderproc/services/order/internal/config"
-	"orderproc/services/order/internal/server"
-	"orderproc/services/order/internal/store"
+	"orderproc/services/inventory/internal/config"
+	"orderproc/services/inventory/internal/server"
+	"orderproc/services/inventory/internal/store"
 
 	_ "github.com/go-sql-driver/mysql"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -42,24 +40,17 @@ func run() error {
 		return err
 	}
 
-	invConn, err := grpc.NewClient(cfg.InventoryAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return err
-	}
-	defer invConn.Close()
-	invClient := inventoryv1.NewInventoryServiceClient(invConn)
-
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		return err
 	}
 
 	grpcServer := grpc.NewServer()
-	orderv1.RegisterOrderServiceServer(grpcServer, server.New(store.New(db), invClient))
+	inventoryv1.RegisterInventoryServiceServer(grpcServer, server.New(store.New(db)))
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("order service listening on %s", cfg.GRPCAddr)
+		log.Printf("inventory service listening on %s", cfg.GRPCAddr)
 		errCh <- grpcServer.Serve(lis)
 	}()
 
@@ -70,7 +61,7 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		log.Print("shutting down order service")
+		log.Print("shutting down inventory service")
 		grpcServer.GracefulStop()
 		return nil
 	}

@@ -40,9 +40,11 @@ A realistic pace is one phase every day or two of focused work. Phases 0–4 are
 ## Phase 2 — Second service + synchronous gRPC call
 **Goal:** Order synchronously reserves stock from Inventory before accepting.
 
-- [ ] Inventory service: `Reserve` / `Release` gRPC, `inventory` table.
-- [ ] Order service calls `Inventory.Reserve` inside `CreateOrder`; reject if reservation fails.
-- [ ] Implement reservation under concurrent orders — **you write this part.**
+- [x] Inventory service: `Reserve` / `Release` gRPC, `inventory` table.
+- [x] Order service calls `Inventory.Reserve` inside `CreateOrder`; reject if reservation fails.
+- [ ] Implement reservation under concurrent orders — **you write this part.** (`Reserve`/`Release`
+      in `services/inventory/internal/store/store.go` are stubbed with the row-lock approach
+      spelled out in comments — fill them in, then write the concurrent test below.)
 
 **Decision #2 (concurrency control):** row lock vs optimistic version vs Redis atomic decrement.
 Have Claude lay out the three; you pick and implement, then have it review for race conditions.

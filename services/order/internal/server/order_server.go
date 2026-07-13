@@ -5,21 +5,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	inventoryv1 "orderproc/proto/gen/inventory/v1"
 	orderv1 "orderproc/proto/gen/order/v1"
 	"orderproc/services/order/internal/store"
 
+	"github.com/oklog/ulid/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// reserveTimeout bounds how long CreateOrder waits on the Inventory reservation call.
+// A full retry/timeout policy is Decision #6 (deferred); this is just a sane bound with
+// no retries yet.
+const reserveTimeout = 3 * time.Second
+
 type OrderServer struct {
 	orderv1.UnimplementedOrderServiceServer
-	store *store.Store
+	store     *store.Store
+	invClient inventoryv1.InventoryServiceClient
 }
 
-func New(s *store.Store) *OrderServer {
-	return &OrderServer{store: s}
+func New(s *store.Store, invClient inventoryv1.InventoryServiceClient) *OrderServer {
+	return &OrderServer{store: s, invClient: invClient}
 }
 
 func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
@@ -41,7 +50,22 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderR
 		items = append(items, store.Item{ProductID: i.GetProductId(), Quantity: i.GetQuantity()})
 	}
 
-	order, err := s.store.CreateOrder(ctx, req.GetUserId(), items)
+	orderID := ulid.Make().String()
+
+	reserveCtx, cancel := context.WithTimeout(ctx, reserveTimeout)
+	defer cancel()
+	reserveResp, err := s.invClient.Reserve(reserveCtx, &inventoryv1.ReserveRequest{
+		OrderId: orderID,
+		Items:   toReservationItems(items),
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Errorf("reserve inventory: %w", err).Error())
+	}
+	if !reserveResp.GetSuccess() {
+		return nil, status.Errorf(codes.FailedPrecondition, "reservation failed: %s", reserveResp.GetReason())
+	}
+
+	order, err := s.store.CreateOrder(ctx, orderID, req.GetUserId(), items)
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Errorf("create order: %w", err).Error())
 	}
@@ -50,6 +74,14 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderR
 		OrderId: order.OrderID,
 		Status:  statusToProto(order.Status),
 	}, nil
+}
+
+func toReservationItems(items []store.Item) []*inventoryv1.ReservationItem {
+	out := make([]*inventoryv1.ReservationItem, 0, len(items))
+	for _, i := range items {
+		out = append(out, &inventoryv1.ReservationItem{ProductId: i.ProductID, Quantity: i.Quantity})
+	}
+	return out
 }
 
 func (s *OrderServer) GetOrder(ctx context.Context, req *orderv1.GetOrderRequest) (*orderv1.GetOrderResponse, error) {
