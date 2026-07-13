@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package events.v1;
+
+option go_package = "orderproc/proto/gen/events/v1;eventsv1";
+
+import "order/v1/order.proto";
+
+// Kafka event payloads exchanged between Order and Payment.
+// Every event carries event_id so consumers can dedupe redeliveries
+// (Kafka is at-least-once; dedupe mechanism itself is Decision #4).
+
+message OrderCreated {
+  string event_id = 1;
+  string order_id = 2;
+  string user_id = 3;
+  repeated order.v1.OrderItem items = 4;
+  int64 timestamp = 5;
+}
+
+message PaymentCompleted {
+  string event_id = 1;
+  string order_id = 2;
+  string payment_id = 3;
+  int64 timestamp = 4;
+}
+
+message PaymentFailed {
+  string event_id = 1;
+  string order_id = 2;
+  string reason = 3;
+  int64 timestamp = 4;
+}

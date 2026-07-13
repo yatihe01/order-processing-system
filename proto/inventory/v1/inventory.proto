@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+option go_package = "orderproc/proto/gen/inventory/v1;inventoryv1";
+
+// InventoryService is called synchronously by Order so it can answer
+// "is stock available right now" before accepting an order.
+service InventoryService {
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+}
+
+message ReservationItem {
+  string product_id = 1;
+  int32 quantity = 2;
+}
+
+message ReserveRequest {
+  // Natural key for the reservation; also the future idempotency key
+  // once dedupe strategy (Decision #4) is settled.
+  string order_id = 1;
+  repeated ReservationItem items = 2;
+}
+
+message ReserveResponse {
+  bool success = 1;
+  string reason = 2;
+}
+
+message ReleaseRequest {
+  string order_id = 1;
+}
+
+message ReleaseResponse {
+  bool success = 1;
+}
