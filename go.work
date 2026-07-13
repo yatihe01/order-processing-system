@@ -2,4 +2,5 @@ go 1.26
 
 use (
 	./proto/gen
+	./services/order
 )

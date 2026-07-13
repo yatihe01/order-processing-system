@@ -115,7 +115,7 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 | 4 | Idempotency         |              |     |
 | 5 | Kafka partition key |              |     |
 | 6 | Retry/timeout       |              |     |
-| 7 | Schema/indexes      |              |     |
+| 7 | Schema/indexes      | ULID as `orders.order_id`/PK; normalized `order_items` (FK, PK `(order_id, product_id)`); no index on `user_id` yet | ULID is client-facing id == PK (no secondary lookup) but time-ordered so inserts don't fragment InnoDB's clustered index like random UUIDv4; normalized items leave room to query by `product_id` later; `user_id` index deferred until a read path needs it |
 | 8 | Observability       |              |     |
 
 ## Conventions
@@ -135,13 +135,15 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 Fill these in as the Makefile grows.
 
 ```
-make tools      # install protoc-gen-go / protoc-gen-go-grpc
-make proto      # regenerate gRPC/protobuf code
-make up         # start infra via docker compose (Kafka, MySQL, Redis)
-make down       # stop infra
-make run-order  # run the order service            (TODO)
-make test       # unit + integration tests         (TODO)
-make load       # run the load test                (TODO)
+make tools            # install protoc-gen-go / protoc-gen-go-grpc / golang-migrate
+make proto            # regenerate gRPC/protobuf code
+make up               # start infra via docker compose (Kafka, MySQL, Redis)
+make down             # stop infra
+make migrate-order    # apply Order service MySQL migrations
+make run-order        # run the order service
+make test             # unit tests (no infra required)
+make test-integration # integration tests against the Docker Compose infra
+make load             # run the load test                (TODO)
 ```
 
 ## Out of scope (say no if I drift here)

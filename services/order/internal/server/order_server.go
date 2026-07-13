@@ -1,0 +1,100 @@
+// Package server implements the OrderService gRPC API on top of the store.
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	orderv1 "orderproc/proto/gen/order/v1"
+	"orderproc/services/order/internal/store"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+type OrderServer struct {
+	orderv1.UnimplementedOrderServiceServer
+	store *store.Store
+}
+
+func New(s *store.Store) *OrderServer {
+	return &OrderServer{store: s}
+}
+
+func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
+	if req.GetUserId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "user_id is required")
+	}
+	if len(req.GetItems()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one item is required")
+	}
+
+	items := make([]store.Item, 0, len(req.GetItems()))
+	for _, i := range req.GetItems() {
+		if i.GetProductId() == "" {
+			return nil, status.Error(codes.InvalidArgument, "item product_id is required")
+		}
+		if i.GetQuantity() <= 0 {
+			return nil, status.Errorf(codes.InvalidArgument, "item %q quantity must be > 0", i.GetProductId())
+		}
+		items = append(items, store.Item{ProductID: i.GetProductId(), Quantity: i.GetQuantity()})
+	}
+
+	order, err := s.store.CreateOrder(ctx, req.GetUserId(), items)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Errorf("create order: %w", err).Error())
+	}
+
+	return &orderv1.CreateOrderResponse{
+		OrderId: order.OrderID,
+		Status:  statusToProto(order.Status),
+	}, nil
+}
+
+func (s *OrderServer) GetOrder(ctx context.Context, req *orderv1.GetOrderRequest) (*orderv1.GetOrderResponse, error) {
+	if req.GetOrderId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "order_id is required")
+	}
+
+	order, err := s.store.GetOrder(ctx, req.GetOrderId())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "order %q not found", req.GetOrderId())
+		}
+		return nil, status.Error(codes.Internal, fmt.Errorf("get order: %w", err).Error())
+	}
+
+	items := make([]*orderv1.OrderItem, 0, len(order.Items))
+	for _, i := range order.Items {
+		items = append(items, &orderv1.OrderItem{ProductId: i.ProductID, Quantity: i.Quantity})
+	}
+
+	return &orderv1.GetOrderResponse{
+		Order: &orderv1.Order{
+			OrderId:   order.OrderID,
+			UserId:    order.UserID,
+			Items:     items,
+			Status:    statusToProto(order.Status),
+			CreatedAt: order.CreatedAt.Unix(),
+		},
+	}, nil
+}
+
+// statusToProto maps the persisted status string to the proto enum. Unrecognized
+// values map to UNKNOWN rather than panicking -- the DB is the source of truth,
+// not the enum, so a mismatch here is a bug to surface, not to crash on.
+func statusToProto(s string) orderv1.OrderStatus {
+	switch s {
+	case "PENDING":
+		return orderv1.OrderStatus_ORDER_STATUS_PENDING
+	case "CONFIRMED":
+		return orderv1.OrderStatus_ORDER_STATUS_CONFIRMED
+	case "CANCELLED":
+		return orderv1.OrderStatus_ORDER_STATUS_CANCELLED
+	case "FAILED":
+		return orderv1.OrderStatus_ORDER_STATUS_FAILED
+	default:
+		return orderv1.OrderStatus_ORDER_STATUS_UNKNOWN
+	}
+}

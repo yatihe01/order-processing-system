@@ -12,10 +12,10 @@ A realistic pace is one phase every day or two of focused work. Phases 0–4 are
 ## Phase 0 — Foundations
 **Goal:** repo, local infra, and the shared contract exist.
 
-- [ ] Init the repo, Go workspace, and directory layout (`proto/`, `services/`, `deploy/`).
-- [ ] Write a `docker-compose.yml` for Kafka, MySQL, Redis (add Prometheus/Grafana/Jaeger in Phase 6).
-- [ ] Write the `.proto` files for the Order and Inventory services and the Kafka event schemas.
-- [ ] `make proto` generates Go code; commit the generated output.
+- [x] Init the repo, Go workspace, and directory layout (`proto/`, `services/`, `deploy/`).
+- [x] Write a `docker-compose.yml` for Kafka, MySQL, Redis (add Prometheus/Grafana/Jaeger in Phase 6).
+- [x] Write the `.proto` files for the Order and Inventory services and the Kafka event schemas.
+- [x] `make proto` generates Go code; commit the generated output.
 
 **Decision:** none yet — but design the proto contracts carefully; they're your API surface.
 **Interview story:** "Here's how I versioned my service contracts and what I'd change to evolve them."
@@ -25,10 +25,12 @@ A realistic pace is one phase every day or two of focused work. Phases 0–4 are
 ## Phase 1 — First service, end to end
 **Goal:** the Order service accepts a `CreateOrder` gRPC call and writes a `PENDING` order to MySQL.
 
-- [ ] Order service skeleton: gRPC server, config from env, graceful shutdown.
-- [ ] MySQL connection + `orders` table + migration.
-- [ ] Implement `CreateOrder`: validate, insert `PENDING`, return order id.
-- [ ] One integration test hitting the real DB via Docker Compose.
+- [x] Order service skeleton: gRPC server, config from env, graceful shutdown.
+- [x] MySQL connection + `orders` table + migration.
+- [x] Implement `CreateOrder`: validate, insert `PENDING`, return order id.
+- [ ] One integration test hitting the real DB via Docker Compose. (written, not yet run —
+      no Docker in the dev sandbox; run `make up && make migrate-order && make test-integration`
+      locally to confirm and check this box)
 
 **Decision #7 (schema/indexes):** design the `orders` table and its indexes.
 **Interview story:** "Walk me through a request from gRPC entry to DB write, including the deadline."

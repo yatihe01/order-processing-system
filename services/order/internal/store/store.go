@@ -1,0 +1,107 @@
+// Package store persists orders to MySQL.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/oklog/ulid/v2"
+)
+
+var ErrNotFound = errors.New("order not found")
+
+type Item struct {
+	ProductID string
+	Quantity  int32
+}
+
+type Order struct {
+	OrderID   string
+	UserID    string
+	Status    string
+	Items     []Item
+	CreatedAt time.Time
+}
+
+type Store struct {
+	db *sql.DB
+}
+
+func New(db *sql.DB) *Store {
+	return &Store{db: db}
+}
+
+// CreateOrder inserts a new PENDING order and its line items in a single transaction.
+func (s *Store) CreateOrder(ctx context.Context, userID string, items []Item) (Order, error) {
+	orderID := ulid.Make().String()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Order{}, fmt.Errorf("store: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	const statusPending = "PENDING"
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO orders (order_id, user_id, status) VALUES (?, ?, ?)`,
+		orderID, userID, statusPending,
+	); err != nil {
+		return Order{}, fmt.Errorf("store: insert order: %w", err)
+	}
+
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)`,
+			orderID, item.ProductID, item.Quantity,
+		); err != nil {
+			return Order{}, fmt.Errorf("store: insert order_item: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Order{}, fmt.Errorf("store: commit: %w", err)
+	}
+
+	return Order{
+		OrderID: orderID,
+		UserID:  userID,
+		Status:  statusPending,
+		Items:   items,
+	}, nil
+}
+
+// GetOrder reads an order and its line items. Returns ErrNotFound if no such order exists.
+func (s *Store) GetOrder(ctx context.Context, orderID string) (Order, error) {
+	order := Order{OrderID: orderID}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT user_id, status, created_at FROM orders WHERE order_id = ?`, orderID)
+	if err := row.Scan(&order.UserID, &order.Status, &order.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Order{}, ErrNotFound
+		}
+		return Order{}, fmt.Errorf("store: select order: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT product_id, quantity FROM order_items WHERE order_id = ? ORDER BY product_id`, orderID)
+	if err != nil {
+		return Order{}, fmt.Errorf("store: select order_items: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item Item
+		if err := rows.Scan(&item.ProductID, &item.Quantity); err != nil {
+			return Order{}, fmt.Errorf("store: scan order_item: %w", err)
+		}
+		order.Items = append(order.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return Order{}, fmt.Errorf("store: iterate order_items: %w", err)
+	}
+
+	return order, nil
+}

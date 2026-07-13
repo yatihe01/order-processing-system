@@ -1,12 +1,15 @@
 PROTO_DIR := proto
 GEN_DIR := proto/gen
 COMPOSE_FILE := deploy/docker-compose.yml
+ORDER_MYSQL_DSN ?= root:root@tcp(localhost:3306)/order_db?parseTime=true
+ORDER_MIGRATE_DSN ?= mysql://root:root@tcp(localhost:3306)/order_db
 
-.PHONY: tools proto up down run-order test load
+.PHONY: tools proto up down run-order migrate-order test test-integration load
 
 tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+	go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 
 proto:
 	protoc \
@@ -24,11 +27,17 @@ up:
 down:
 	docker compose -f $(COMPOSE_FILE) down
 
-run-order: # TODO: Phase 1
-	@echo "order service not implemented yet"
+migrate-order:
+	migrate -path services/order/migrations -database "$(ORDER_MIGRATE_DSN)" up
 
-test: # TODO: Phase 1
-	@echo "no tests yet"
+run-order:
+	ORDER_MYSQL_DSN="$(ORDER_MYSQL_DSN)" go run ./services/order/cmd/order
+
+test:
+	go test ./proto/gen/... ./services/order/...
+
+test-integration:
+	ORDER_MYSQL_DSN="$(ORDER_MYSQL_DSN)" go test -tags=integration ./services/order/...
 
 load: # TODO: Phase 7
 	@echo "no load test yet"
