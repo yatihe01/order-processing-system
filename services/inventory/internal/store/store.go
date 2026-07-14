@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 type Item struct {
@@ -60,40 +62,48 @@ func (s *Store) Reserve(ctx context.Context, orderID string, items []Item) (ok b
 	// (3) Walk each item: check stock, then decrement + record the reservation.
 	for _, item := range items {
 		var available int32
-		// FOR UPDATE is the magic words: it locks THIS row until we commit or
-		// roll back, so no other order can read-then-write it underneath us.
-		err := tx.QueryRowContext(ctx, `SELECT quantity FROM inventory WHERE product_id=? FOR UPDATE`, item.ProductID).Scan(&available)
-
+		// (A) Lock the inventory row FIRST. This still serializes concurrent
+		//     DIFFERENT orders racing for the same product (the Phase 2 guarantee).
+		err := tx.QueryRowContext(ctx,
+			`SELECT quantity FROM inventory WHERE product_id=? FOR UPDATE`,
+			item.ProductID).Scan(&available)
 		if errors.Is(err, sql.ErrNoRows) {
-			// No such product — bail cleanly (defer rolls back).
 			return false, "unknown product: " + item.ProductID, nil
 		}
 		if err != nil {
 			return false, "", fmt.Errorf("select for update: %w", err)
 		}
 
-		if available < item.Quantity {
-			// Not enough stock. Returning here triggers the deferred Rollback,
-			// which un-does any items we already reserved earlier in this loop.
-			return false, "insufficient stock for " + item.ProductID, nil
-		}
-
-		// Enough stock: subtract it.
-		_, err = tx.ExecContext(ctx,
-			`UPDATE inventory SET quantity = quantity - ? WHERE product_id = ?`,
-			item.Quantity, item.ProductID,
-		)
-		if err != nil {
-			return false, "", fmt.Errorf("decrement: %w", err)
-		}
-
-		// Record that this order holds that stock (so Release can give it back).
+		// (B) Try to record the reservation BEFORE touching stock. The primary key
+		//     (order_id, product_id) means this can only succeed ONCE per order+product.
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO reservations (order_id, product_id, quantity) VALUES (?, ?, ?)`,
-			orderID, item.ProductID, item.Quantity,
-		)
+			orderID, item.ProductID, item.Quantity)
+
+		// (C) If the insert hit a duplicate key, this exact reservation already
+		//     exists — a redelivered/retried Reserve. Idempotent skip: do NOT
+		//     decrement again, just move to the next item.
+		// Note: a redelivery is assumed to carry the same quantity as the original;
+		// same order_id means same order, so we intentionally keep the first values.
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			continue
+		}
 		if err != nil {
+			// Any other insert error is a real failure.
 			return false, "", fmt.Errorf("insert reservation: %w", err)
+		}
+
+		// (D) Insert succeeded, so this is a genuinely new reservation. NOW it's
+		//     safe to check stock and decrement — this code only runs once per order.
+		if available < item.Quantity {
+			return false, "insufficient stock for " + item.ProductID, nil
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE inventory SET quantity = quantity - ? WHERE product_id = ?`,
+			item.Quantity, item.ProductID)
+		if err != nil {
+			return false, "", fmt.Errorf("decrement: %w", err)
 		}
 	}
 

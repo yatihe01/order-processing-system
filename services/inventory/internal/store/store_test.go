@@ -140,3 +140,43 @@ func TestReserve_Concurrent_NoOversell(t *testing.T) {
 		t.Errorf("final stock = %d, want 0", final)
 	}
 }
+
+// TestReserve_Idempotent proves that calling Reserve twice with the SAME order id
+// (as happens when Kafka redelivers a message) reserves stock only ONCE.
+// Without the primary-key dedupe in Reserve, the second call would decrement
+// again and this test would see stock at 98 instead of 99.
+func TestReserve_Idempotent(t *testing.T) {
+	s := setupTestStore(t)
+
+	const product = "team-badge"
+	const startingStock = 100
+	seedProduct(t, s, product, startingStock)
+
+	orderID := "order-dup"
+	items := []Item{{ProductID: product, Quantity: 1}}
+
+	// First delivery: a normal, new reservation.
+	ok, reason, err := s.Reserve(context.Background(), orderID, items)
+	if err != nil {
+		t.Fatalf("first Reserve errored: %v", err)
+	}
+	if !ok {
+		t.Fatalf("first Reserve should succeed, got ok=false reason=%q", reason)
+	}
+
+	// Second delivery: the SAME order id again (a redelivery/retry).
+	// It should still report success (the reservation exists and is valid)...
+	ok, reason, err = s.Reserve(context.Background(), orderID, items)
+	if err != nil {
+		t.Fatalf("second Reserve errored: %v", err)
+	}
+	if !ok {
+		t.Fatalf("redelivered Reserve should report success, got ok=false reason=%q", reason)
+	}
+
+	// ...but it must NOT have decremented stock a second time.
+	if final := currentStock(t, s, product); final != startingStock-1 {
+		t.Errorf("stock = %d, want %d (redelivery double-decremented!)",
+			final, startingStock-1)
+	}
+}
