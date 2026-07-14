@@ -113,7 +113,7 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 | 2 | Inventory concurrency | `SELECT ... FOR UPDATE` row lock | Simple to reason about, strictly serializes concurrent reservations on the same SKU, stays entirely in MySQL — doesn't pull the Redis-authoritative question (Decision #3, Phase 5) forward |
 | 3 | Redis role          |              |     |
 | 4 | Idempotency         |              |     |
-| 5 | Kafka partition key |              |     |
+| 5 | Kafka partition key | `order_id`, on every topic (`order-created`, `payment-completed`, `payment-failed`) | Spreads load evenly (no hot partition from a popular SKU or power user) and guarantees per-order ordering, the only ordering relationship these events have |
 | 6 | Retry/timeout       |              |     |
 | 7 | Schema/indexes      | ULID as `orders.order_id`/PK; normalized `order_items` (FK, PK `(order_id, product_id)`); no index on `user_id` yet | ULID is client-facing id == PK (no secondary lookup) but time-ordered so inserts don't fragment InnoDB's clustered index like random UUIDv4; normalized items leave room to query by `product_id` later; `user_id` index deferred until a read path needs it |
 | 8 | Observability       |              |     |
@@ -135,15 +135,19 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 Fill these in as the Makefile grows.
 
 ```
-make tools            # install protoc-gen-go / protoc-gen-go-grpc / golang-migrate
-make proto            # regenerate gRPC/protobuf code
-make up               # start infra via docker compose (Kafka, MySQL, Redis)
-make down             # stop infra
-make migrate-order    # apply Order service MySQL migrations
-make run-order        # run the order service
-make test             # unit tests (no infra required)
-make test-integration # integration tests against the Docker Compose infra
-make load             # run the load test                (TODO)
+make tools             # install protoc-gen-go / protoc-gen-go-grpc / golang-migrate
+make proto             # regenerate gRPC/protobuf code
+make up                # start infra via docker compose (Kafka, MySQL, Redis)
+make down              # stop infra
+make migrate-order     # apply Order service MySQL migrations
+make migrate-inventory # apply Inventory service MySQL migrations
+make migrate-payment   # apply Payment service MySQL migrations
+make run-order         # run the order service
+make run-inventory     # run the inventory service
+make run-payment       # run the payment service
+make test              # unit tests (no infra required)
+make test-integration  # integration tests against the Docker Compose infra
+make load              # run the load test                (TODO)
 ```
 
 ## Out of scope (say no if I drift here)

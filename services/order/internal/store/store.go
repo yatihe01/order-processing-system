@@ -71,6 +71,24 @@ func (s *Store) CreateOrder(ctx context.Context, orderID, userID string, items [
 	}, nil
 }
 
+// UpdateStatus sets an order's status. Returns ErrNotFound if no such order exists.
+// Guarding against out-of-order or duplicate updates (e.g. a redelivered PaymentCompleted)
+// is Phase 4's idempotency work -- this is an unconditional write.
+func (s *Store) UpdateStatus(ctx context.Context, orderID, status string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ? WHERE order_id = ?`, status, orderID)
+	if err != nil {
+		return fmt.Errorf("store: update status: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update status rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // GetOrder reads an order and its line items. Returns ErrNotFound if no such order exists.
 func (s *Store) GetOrder(ctx context.Context, orderID string) (Order, error) {
 	order := Order{OrderID: orderID}

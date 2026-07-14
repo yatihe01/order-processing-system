@@ -9,6 +9,7 @@ import (
 
 	inventoryv1 "orderproc/proto/gen/inventory/v1"
 	orderv1 "orderproc/proto/gen/order/v1"
+	"orderproc/services/order/internal/kafka"
 	"orderproc/services/order/internal/store"
 
 	"github.com/oklog/ulid/v2"
@@ -25,10 +26,11 @@ type OrderServer struct {
 	orderv1.UnimplementedOrderServiceServer
 	store     *store.Store
 	invClient inventoryv1.InventoryServiceClient
+	producer  *kafka.Producer
 }
 
-func New(s *store.Store, invClient inventoryv1.InventoryServiceClient) *OrderServer {
-	return &OrderServer{store: s, invClient: invClient}
+func New(s *store.Store, invClient inventoryv1.InventoryServiceClient, producer *kafka.Producer) *OrderServer {
+	return &OrderServer{store: s, invClient: invClient, producer: producer}
 }
 
 func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
@@ -68,6 +70,14 @@ func (s *OrderServer) CreateOrder(ctx context.Context, req *orderv1.CreateOrderR
 	order, err := s.store.CreateOrder(ctx, orderID, req.GetUserId(), items)
 	if err != nil {
 		return nil, status.Error(codes.Internal, fmt.Errorf("create order: %w", err).Error())
+	}
+
+	// Known gap: this write and the DB commit above aren't atomic (the dual-write
+	// problem). If this publish fails, the order row exists but no event ever fires
+	// to trigger payment. The fix is a transactional outbox; not built here -- see
+	// CLAUDE.md / ROADMAP Phase 3 notes.
+	if err := s.producer.PublishOrderCreated(ctx, order); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Errorf("publish order created: %w", err).Error())
 	}
 
 	return &orderv1.CreateOrderResponse{

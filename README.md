@@ -15,6 +15,10 @@ system small enough to defend every design decision in an interview, not feature
 - **Phase 1 — Order service**: done. `CreateOrder` / `GetOrder` over gRPC, backed by MySQL.
 - **Phase 2 — Inventory service + synchronous `Reserve`**: scaffolding done; the row-lock
   reservation logic itself (`Reserve`/`Release`) is stubbed pending implementation.
+- **Phase 3 — Async messaging (Payment service + Kafka)**: done. `Order` publishes
+  `OrderCreated`, `Payment` mock-charges and publishes the result, `Order` consumes it and
+  updates status. Can't run end to end yet since it's downstream of Phase 2's still-stubbed
+  `Reserve`/`Release`.
 
 See [ROADMAP.md](ROADMAP.md) for the full phase breakdown.
 
@@ -62,8 +66,8 @@ reserve → charge → confirm, with compensation (release stock, cancel order) 
 proto/           # .proto contracts + generated Go code (proto/gen)
 services/        # one Go module per service (cmd/, internal/ per service)
   order/         # Order service — implemented
-  inventory/     # Inventory service — in progress
-  payment/       # Payment service — not started
+  inventory/     # Inventory service — scaffolded, Reserve/Release stubbed
+  payment/       # Payment service — implemented
 deploy/          # docker-compose.yml + MySQL init scripts
 ```
 
@@ -73,8 +77,10 @@ deploy/          # docker-compose.yml + MySQL init scripts
 make up                 # start Kafka, MySQL, Redis via docker compose
 make migrate-order      # apply Order service MySQL migrations
 make migrate-inventory  # apply Inventory service MySQL migrations
+make migrate-payment    # apply Payment service MySQL migrations
 make run-order          # run the Order service
 make run-inventory      # run the Inventory service
+make run-payment        # run the Payment service
 make test                 # unit tests (no infra required)
 make test-integration     # integration tests against the Docker Compose infra
 make down                 # stop infra

@@ -7,12 +7,14 @@ import (
 	"log"
 	"net"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	inventoryv1 "orderproc/proto/gen/inventory/v1"
 	orderv1 "orderproc/proto/gen/order/v1"
 	"orderproc/services/order/internal/config"
+	"orderproc/services/order/internal/kafka"
 	"orderproc/services/order/internal/server"
 	"orderproc/services/order/internal/store"
 
@@ -49,13 +51,21 @@ func run() error {
 	defer invConn.Close()
 	invClient := inventoryv1.NewInventoryServiceClient(invConn)
 
+	producer := kafka.NewProducer(cfg.KafkaBrokers)
+	defer producer.Close()
+
+	st := store.New(db)
+
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		return err
 	}
 
 	grpcServer := grpc.NewServer()
-	orderv1.RegisterOrderServiceServer(grpcServer, server.New(store.New(db), invClient))
+	orderv1.RegisterOrderServiceServer(grpcServer, server.New(st, invClient, producer))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -63,15 +73,31 @@ func run() error {
 		errCh <- grpcServer.Serve(lis)
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	resultConsumer := kafka.NewResultConsumer(st)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := resultConsumer.RunPaymentCompleted(ctx, cfg.KafkaBrokers); err != nil {
+			log.Printf("payment-completed consumer stopped: %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := resultConsumer.RunPaymentFailed(ctx, cfg.KafkaBrokers); err != nil {
+			log.Printf("payment-failed consumer stopped: %v", err)
+		}
+	}()
 
 	select {
 	case err := <-errCh:
+		stop()
+		wg.Wait()
 		return err
 	case <-ctx.Done():
 		log.Print("shutting down order service")
 		grpcServer.GracefulStop()
+		wg.Wait()
 		return nil
 	}
 }

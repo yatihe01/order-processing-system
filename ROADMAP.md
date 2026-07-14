@@ -56,10 +56,14 @@ Write a concurrent test that proves your choice holds.
 ## Phase 3 — Asynchronous messaging
 **Goal:** payment happens off the request path via Kafka.
 
-- [ ] Order service publishes `OrderCreated` to Kafka after reserving + persisting.
-- [ ] Payment service consumes `OrderCreated`, processes a mock charge, publishes
+- [x] Order service publishes `OrderCreated` to Kafka after reserving + persisting.
+- [x] Payment service consumes `OrderCreated`, processes a mock charge, publishes
       `PaymentCompleted` / `PaymentFailed`.
-- [ ] Order service consumes the result and updates order status.
+- [x] Order service consumes the result and updates order status.
+      (Not run live yet — no Docker in the dev sandbox, and Inventory's `Reserve`/`Release` are
+      still stubbed from Phase 2, so `CreateOrder` can't reach the publish step end to end until
+      those are implemented. Verify with `make up`, all three `make migrate-*`, then
+      `run-inventory && run-order && run-payment` once Reserve/Release are filled in.)
 
 **Decision #5 (partition key):** choose the Kafka partition key and justify the ordering it gives.
 **Interview story:** "Why Kafka between order and payment instead of a gRPC call? What happens if
