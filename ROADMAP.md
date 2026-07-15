@@ -28,9 +28,9 @@ A realistic pace is one phase every day or two of focused work. Phases 0–4 are
 - [x] Order service skeleton: gRPC server, config from env, graceful shutdown.
 - [x] MySQL connection + `orders` table + migration.
 - [x] Implement `CreateOrder`: validate, insert `PENDING`, return order id.
-- [ ] One integration test hitting the real DB via Docker Compose. (written, not yet run —
-      no Docker in the dev sandbox; run `make up && make migrate-order && make test-integration`
-      locally to confirm and check this box)
+- [ ] One integration test hitting the real DB via Docker Compose. (written; tried against your
+      live MySQL but `order_db` doesn't have migrations applied yet — `make migrate-order`, then
+      `make test-integration`, to confirm and check this box)
 
 **Decision #7 (schema/indexes):** design the `orders` table and its indexes.
 **Interview story:** "Walk me through a request from gRPC entry to DB write, including the deadline."
@@ -42,9 +42,13 @@ A realistic pace is one phase every day or two of focused work. Phases 0–4 are
 
 - [x] Inventory service: `Reserve` / `Release` gRPC, `inventory` table.
 - [x] Order service calls `Inventory.Reserve` inside `CreateOrder`; reject if reservation fails.
-- [ ] Implement reservation under concurrent orders — **you write this part.** (`Reserve`/`Release`
-      in `services/inventory/internal/store/store.go` are stubbed with the row-lock approach
-      spelled out in comments — fill them in, then write the concurrent test below.)
+- [x] Implement reservation under concurrent orders — **you wrote this part.** Row-lock
+      `Reserve`/`Release` in `services/inventory/internal/store/store.go`, proven by
+      `TestReserve_Concurrent_NoOversell` (100 goroutines racing 10 units of stock → exactly 10
+      succeed) and `TestReserve_Idempotent`, both passing under `-race`. Reviewed and one real
+      bug fixed along the way: duplicate `product_id` line items within a single order collided
+      on the redelivery-dedup key and silently under-reserved — fixed by aggregating quantities
+      per product before the reservation loop.
 
 **Decision #2 (concurrency control):** row lock vs optimistic version vs Redis atomic decrement.
 Have Claude lay out the three; you pick and implement, then have it review for race conditions.
@@ -60,10 +64,10 @@ Write a concurrent test that proves your choice holds.
 - [x] Payment service consumes `OrderCreated`, processes a mock charge, publishes
       `PaymentCompleted` / `PaymentFailed`.
 - [x] Order service consumes the result and updates order status.
-      (Not run live yet — no Docker in the dev sandbox, and Inventory's `Reserve`/`Release` are
-      still stubbed from Phase 2, so `CreateOrder` can't reach the publish step end to end until
-      those are implemented. Verify with `make up`, all three `make migrate-*`, then
-      `run-inventory && run-order && run-payment` once Reserve/Release are filled in.)
+      (Not run live end to end yet — `order_db` doesn't have migrations applied on your MySQL
+      yet, per Phase 1's note, and there's no Docker CLI in the dev sandbox to drive `make up`
+      from here. Inventory's `Reserve`/`Release` are no longer the blocker, those are done.
+      Verify with all three `make migrate-*`, then `run-inventory && run-order && run-payment`.)
 
 **Decision #5 (partition key):** choose the Kafka partition key and justify the ordering it gives.
 **Interview story:** "Why Kafka between order and payment instead of a gRPC call? What happens if
@@ -78,9 +82,13 @@ the payment service is down for five minutes?"
       (the compensation path). Scaffolded — `handlePaymentFailed` in
       `services/order/internal/kafka/consumer.go` is stubbed with the proposed design (ordering,
       and why it has to be that order) — **you write this part.**
-- [ ] Make the Payment consumer idempotent — a redelivered `OrderCreated` must not double-charge.
-      Scaffolded — `process` in `services/payment/internal/kafka/consumer.go` is stubbed the
-      same way — **you write this part.**
+- [x] Make the Payment consumer idempotent — a redelivered `OrderCreated` must not double-charge.
+      Implemented (`process` in `services/payment/internal/kafka/consumer.go`) at the user's
+      explicit request, following the design already reviewed and approved in the stub. Verified
+      live against real MySQL + Kafka: a fresh `CreateOrder` went `PENDING` → `CONFIRMED` in ~2s
+      end to end; a manually-crafted declined charge recorded `FAILED`; republishing the exact
+      same `OrderCreated` a second time hit the duplicate-key path and reused the *same*
+      `payment_id` rather than double-charging or erroring.
 - [x] Make the Order consumer idempotent for `PaymentCompleted`. Implemented directly
       (`handlePaymentCompleted`) — no compensation/ordering question on this path once
       Decision #4 was resolved, so it stayed mechanical.

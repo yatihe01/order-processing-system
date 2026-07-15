@@ -18,10 +18,13 @@ system small enough to defend every design decision in an interview, not feature
 - **Phase 3 — Async messaging (Payment service + Kafka)**: done. `Order` publishes
   `OrderCreated`, `Payment` mock-charges and publishes the result, `Order` consumes it and
   updates status.
-- **Phase 4 — Compensation + idempotency**: scaffolding done (consumer loops switched to
+- **Phase 4 — Compensation + idempotency**: in progress. Consumer loops switched to
   `FetchMessage`/`CommitMessages` so failures redeliver on restart instead of silently
-  auto-committing). The compensation/idempotency logic itself — `handlePaymentFailed` in Order,
-  `process` in Payment — is stubbed with the proposed design, pending implementation.
+  auto-committing. Payment's idempotent redelivery handling (`process`) is implemented and
+  verified live (real `CreateOrder` → `CONFIRMED` end to end; a redelivered `OrderCreated`
+  reuses the existing `payment_id` instead of double-charging). Order's compensation path
+  (`handlePaymentFailed` — release the reservation, cancel the order) is still stubbed with the
+  proposed design, pending implementation.
 
 See [ROADMAP.md](ROADMAP.md) for the full phase breakdown.
 

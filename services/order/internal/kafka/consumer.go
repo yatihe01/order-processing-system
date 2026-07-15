@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	eventsv1 "orderproc/proto/gen/events/v1"
@@ -131,34 +132,50 @@ func (c *ResultConsumer) RunPaymentFailed(ctx context.Context, brokers []string)
 }
 
 // handlePaymentFailed is the compensation path: release the Inventory
-// reservation and cancel the order. TODO(you): implement.
+// reservation and cancel the order.
 //
-// Proposed design -- and why the ordering matters, not just "dedupe the
-// redelivery":
+// The status transition is claimed FIRST, before touching Inventory at all --
+// that ordering, not just deduping the redelivery, is what makes this safe:
 //
-//  1. Call currentStatus, err := c.store.UpdateStatusIfPending(ctx, evt.GetOrderId(), "CANCELLED")
-//     FIRST, before touching Inventory at all.
-//  2. If currentStatus == "CONFIRMED": a PaymentCompleted already won the race
-//     for this order -- this PaymentFailed is stale/conflicting. Do NOT call
-//     Release. The reservation backs a confirmed order; releasing it here would
-//     double-book that stock while the confirmed order still expects it filled.
-//     Log and return nil (nothing to retry).
-//  3. If currentStatus == "CANCELLED" (whether this call just set it, or a prior
-//     delivery of this same PaymentFailed already did): call c.invClient.Release.
-//     Calling it every time currentStatus is CANCELLED -- not just the first
-//     time -- is what makes this safe against partial failure: if Release
-//     errored on a previous delivery (status already flipped, stock never
-//     actually released), returning that error here leaves the message
-//     uncommitted, so it's redelivered, and the redelivered call reads
-//     currentStatus == "CANCELLED" again and retries Release (itself already
-//     idempotent -- a second call finds no reservation rows and no-ops).
-//     Gating Release on "did the UPDATE apply just now" instead would silently
-//     drop that retry and leak the reservation forever.
+//   - If currentStatus == "CONFIRMED": a PaymentCompleted already won the race
+//     for this order -- this PaymentFailed is stale/conflicting. Release is
+//     never called. The reservation backs a confirmed order; releasing it here
+//     would double-book that stock while the confirmed order still expects it
+//     filled.
+//   - If currentStatus == "CANCELLED" (whether this call just set it, or a
+//     prior delivery of this same PaymentFailed already did): Release is
+//     called every time, not just the first. That's what makes this safe
+//     against partial failure -- if Release errored on a previous delivery
+//     (status already flipped, stock never actually released), returning that
+//     error here leaves the message uncommitted, so it's redelivered, and the
+//     redelivered call reads currentStatus == "CANCELLED" again and retries
+//     Release (itself already idempotent -- a second call finds no
+//     reservation rows and no-ops). Gating Release on "did the UPDATE apply
+//     just now" instead would silently drop that retry and leak the
+//     reservation forever.
 //
-// A naive "skip everything if this is a redelivery" check passes the
-// redelivery test but is wrong for both failure modes above: it can release
-// stock out from under a confirmed order, and it can permanently leak a
-// reservation if Release fails once.
+// Any other currentStatus is a data invariant violation (only PENDING,
+// CONFIRMED, and CANCELLED are ever written) -- treated as a hard error
+// rather than silently ignored, since committing past it would hide a real
+// bug.
 func (c *ResultConsumer) handlePaymentFailed(ctx context.Context, evt *eventsv1.PaymentFailed) error {
-	return errors.New("not implemented")
+	orderID := evt.GetOrderId()
+
+	currentStatus, err := c.store.UpdateStatusIfPending(ctx, orderID, "CANCELLED")
+	if err != nil {
+		return err
+	}
+
+	switch currentStatus {
+	case "CONFIRMED":
+		log.Printf("payment-failed: order %q already CONFIRMED, not releasing (stale/conflicting event)", orderID)
+		return nil
+	case "CANCELLED":
+		if _, err := c.invClient.Release(ctx, &inventoryv1.ReleaseRequest{OrderId: orderID}); err != nil {
+			return fmt.Errorf("release reservation for order %q: %w", orderID, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("payment-failed: order %q has unexpected status %q", orderID, currentStatus)
+	}
 }
