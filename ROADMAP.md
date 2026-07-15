@@ -75,10 +75,20 @@ the payment service is down for five minutes?"
 **Goal:** the saga is correct even with retries and partial failures.
 
 - [ ] Handle `PaymentFailed`: release the inventory reservation, mark the order `CANCELLED`
-      (the compensation path).
+      (the compensation path). Scaffolded — `handlePaymentFailed` in
+      `services/order/internal/kafka/consumer.go` is stubbed with the proposed design (ordering,
+      and why it has to be that order) — **you write this part.**
 - [ ] Make the Payment consumer idempotent — a redelivered `OrderCreated` must not double-charge.
-- [ ] Make the Order consumer idempotent for `PaymentCompleted`.
-- [ ] Test: kill a consumer mid-flow and confirm no double effects on restart.
+      Scaffolded — `process` in `services/payment/internal/kafka/consumer.go` is stubbed the
+      same way — **you write this part.**
+- [x] Make the Order consumer idempotent for `PaymentCompleted`. Implemented directly
+      (`handlePaymentCompleted`) — no compensation/ordering question on this path once
+      Decision #4 was resolved, so it stayed mechanical.
+- [ ] Test: kill a consumer mid-flow and confirm no double effects on restart. Write this once
+      the two stubs above are implemented — **you write this part**, matching Phase 2's
+      concurrent test. Note the consumer loops now use `FetchMessage`/`CommitMessages` (not
+      Phase 3's auto-committing `ReadMessage`) specifically so a handler error leaves the
+      message uncommitted and redelivers on restart — that's the mechanism this test exercises.
 
 **Decision #1 (saga style) + #4 (idempotency):** choreography vs orchestration, and how you dedupe.
 **Interview story:** "Kafka is at-least-once — how did you stop a redelivered event from charging

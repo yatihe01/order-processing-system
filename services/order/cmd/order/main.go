@@ -73,7 +73,7 @@ func run() error {
 		errCh <- grpcServer.Serve(lis)
 	}()
 
-	resultConsumer := kafka.NewResultConsumer(st)
+	resultConsumer := kafka.NewResultConsumer(st, invClient)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {

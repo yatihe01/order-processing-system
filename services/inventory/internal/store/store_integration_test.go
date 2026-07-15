@@ -1,5 +1,10 @@
+//go:build integration
+
 // Package store tests. This file lives next to store.go in the same package,
 // so it can reach unexported fields like Store.db (a "white-box" test).
+// Requires a live MySQL (make up && make migrate-inventory) -- gated behind
+// the integration tag so `make test` stays infra-free, matching Order's
+// store_integration_test.go.
 package store
 
 import (

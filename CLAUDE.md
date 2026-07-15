@@ -56,10 +56,13 @@ Three services. One synchronous path (gRPC) and one asynchronous path (Kafka eve
 
 - **Order service** — public entrypoint. `CreateOrder` (gRPC) synchronously calls Inventory to
   reserve stock, writes a `PENDING` order to MySQL, publishes `OrderCreated` to Kafka, returns
-  the order id. Later consumes `PaymentCompleted`/`PaymentFailed` and updates order status.
+  the order id. Later consumes `PaymentCompleted`/`PaymentFailed`: on success, confirms the
+  order; on failure, calls `Inventory.Release` (gRPC) to compensate and cancels the order.
+  Order stays the one place that drives the saga end to end (Decision #1).
 - **Inventory service** — `Reserve` / `Release` (gRPC, synchronous because the order needs an
-  immediate answer). Owns the inventory table; uses Redis for hot stock reads. Consumes
-  compensation events to release stock on failure.
+  immediate answer, and because Order calls `Release` directly as the compensation step rather
+  than Inventory consuming events itself). Owns the inventory table; uses Redis for hot stock
+  reads.
 - **Payment service** — consumes `OrderCreated` (async, because payment is slow and retryable),
   processes a mock charge, publishes `PaymentCompleted` or `PaymentFailed`.
 
@@ -109,10 +112,10 @@ Fill this in as we go. One line of reasoning each — this is my interview cheat
 
 | # | Decision            | What I chose | Why |
 |---|---------------------|--------------|-----|
-| 1 | Saga style          |              |     |
+| 1 | Saga style          | Choreography, with Order as the compensation caller: Order calls `Inventory.Release` via gRPC on `PaymentFailed` rather than Inventory consuming Kafka events itself | Order stays the one place that drives the whole saga end to end — easiest to trace, reuses the `invClient` already wired for `Reserve`, no new Kafka infra needed in Inventory |
 | 2 | Inventory concurrency | `SELECT ... FOR UPDATE` row lock | Simple to reason about, strictly serializes concurrent reservations on the same SKU, stays entirely in MySQL — doesn't pull the Redis-authoritative question (Decision #3, Phase 5) forward |
 | 3 | Redis role          |              |     |
-| 4 | Idempotency         |              |     |
+| 4 | Idempotency         | Reuse existing primary keys, no new schema: Payment dedupes on `payments.order_id` (catch the duplicate-key insert, republish the stored outcome); Order dedupes via a conditional `UPDATE ... WHERE status='PENDING'`, using the *resulting* status (not just whether it applied) to tell a stale/conflicting event apart from a genuine redelivery | Extends the exact dedup pattern already in `Reserve`; the Order-side conditional update also protects against out-of-order/conflicting outcomes (e.g. a stale `PaymentFailed` arriving after `PaymentCompleted` already won), not just literal redeliveries |
 | 5 | Kafka partition key | `order_id`, on every topic (`order-created`, `payment-completed`, `payment-failed`) | Spreads load evenly (no hot partition from a popular SKU or power user) and guarantees per-order ordering, the only ordering relationship these events have |
 | 6 | Retry/timeout       |              |     |
 | 7 | Schema/indexes      | ULID as `orders.order_id`/PK; normalized `order_items` (FK, PK `(order_id, product_id)`); no index on `user_id` yet | ULID is client-facing id == PK (no secondary lookup) but time-ordered so inserts don't fragment InnoDB's clustered index like random UUIDv4; normalized items leave room to query by `product_id` later; `user_id` index deferred until a read path needs it |

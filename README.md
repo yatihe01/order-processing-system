@@ -13,12 +13,15 @@ system small enough to defend every design decision in an interview, not feature
 
 - **Phase 0 — Foundations**: done. Proto contracts, Docker Compose infra, Go workspace.
 - **Phase 1 — Order service**: done. `CreateOrder` / `GetOrder` over gRPC, backed by MySQL.
-- **Phase 2 — Inventory service + synchronous `Reserve`**: scaffolding done; the row-lock
-  reservation logic itself (`Reserve`/`Release`) is stubbed pending implementation.
+- **Phase 2 — Inventory service + synchronous `Reserve`**: done. Row-lock `Reserve`/`Release`
+  implemented and proven under `-race` (no oversell, idempotent on redelivery).
 - **Phase 3 — Async messaging (Payment service + Kafka)**: done. `Order` publishes
   `OrderCreated`, `Payment` mock-charges and publishes the result, `Order` consumes it and
-  updates status. Can't run end to end yet since it's downstream of Phase 2's still-stubbed
-  `Reserve`/`Release`.
+  updates status.
+- **Phase 4 — Compensation + idempotency**: scaffolding done (consumer loops switched to
+  `FetchMessage`/`CommitMessages` so failures redeliver on restart instead of silently
+  auto-committing). The compensation/idempotency logic itself — `handlePaymentFailed` in Order,
+  `process` in Payment — is stubbed with the proposed design, pending implementation.
 
 See [ROADMAP.md](ROADMAP.md) for the full phase breakdown.
 
@@ -65,9 +68,9 @@ reserve → charge → confirm, with compensation (release stock, cancel order) 
 ```
 proto/           # .proto contracts + generated Go code (proto/gen)
 services/        # one Go module per service (cmd/, internal/ per service)
-  order/         # Order service — implemented
-  inventory/     # Inventory service — scaffolded, Reserve/Release stubbed
-  payment/       # Payment service — implemented
+  order/         # Order service — implemented; PaymentFailed compensation stubbed (Phase 4)
+  inventory/     # Inventory service — implemented, Reserve/Release proven under -race
+  payment/       # Payment service — implemented; idempotent redelivery handling stubbed (Phase 4)
 deploy/          # docker-compose.yml + MySQL init scripts
 ```
 

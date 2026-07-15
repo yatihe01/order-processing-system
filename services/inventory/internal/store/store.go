@@ -42,6 +42,14 @@ func New(db *sql.DB) *Store {
 //     reservations (order_id, product_id, quantity).
 //   - Commit only if every item cleared.
 func (s *Store) Reserve(ctx context.Context, orderID string, items []Item) (ok bool, reason string, err error) {
+	// (0) Aggregate by product_id first. An order can legitimately carry more
+	// than one line item for the same SKU (nothing upstream merges duplicate
+	// product_ids before calling Reserve). Without this, the second line item
+	// for a given product collides with the first on the (order_id, product_id)
+	// dedup key below and gets silently treated as "already reserved" -- which
+	// understates the real decrement instead of protecting against it.
+	items = mergeByProduct(items)
+
 	// (1) Deadlock avoidance: always lock rows in the SAME order every time.
 	// Sorting by ProductID guarantees two concurrent orders touching the same
 	// SKUs grab them in identical sequence, so they can't freeze waiting on
@@ -112,6 +120,25 @@ func (s *Store) Reserve(ctx context.Context, orderID string, items []Item) (ok b
 		return false, "", fmt.Errorf("commit: %w", err)
 	}
 	return true, "", nil
+}
+
+// mergeByProduct sums quantities for repeated product_ids, preserving first-seen
+// order. A caller-supplied []Item{{A,2},{A,3}} becomes []Item{{A,5}}.
+func mergeByProduct(items []Item) []Item {
+	totals := make(map[string]int32, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		if _, seen := totals[item.ProductID]; !seen {
+			order = append(order, item.ProductID)
+		}
+		totals[item.ProductID] += item.Quantity
+	}
+
+	merged := make([]Item, len(order))
+	for i, productID := range order {
+		merged[i] = Item{ProductID: productID, Quantity: totals[productID]}
+	}
+	return merged
 }
 
 // Release restores every item previously reserved for orderID (looked up from the

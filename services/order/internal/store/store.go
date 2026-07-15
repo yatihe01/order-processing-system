@@ -71,22 +71,39 @@ func (s *Store) CreateOrder(ctx context.Context, orderID, userID string, items [
 	}, nil
 }
 
-// UpdateStatus sets an order's status. Returns ErrNotFound if no such order exists.
-// Guarding against out-of-order or duplicate updates (e.g. a redelivered PaymentCompleted)
-// is Phase 4's idempotency work -- this is an unconditional write.
-func (s *Store) UpdateStatus(ctx context.Context, orderID, status string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ? WHERE order_id = ?`, status, orderID)
+// UpdateStatusIfPending transitions an order to newStatus only if it's still PENDING,
+// and returns the order's resulting status either way -- newStatus if this call applied
+// the transition, or whatever the order's current status already was if it didn't (a
+// redelivery, or a conflicting transition that got there first). Returning the resulting
+// status rather than a bare "did it apply" bool is what lets callers distinguish those
+// two no-op cases from each other, which matters for compensation logic (see
+// RunPaymentFailed in internal/kafka/consumer.go). Returns ErrNotFound if no such order
+// exists at all.
+func (s *Store) UpdateStatusIfPending(ctx context.Context, orderID, newStatus string) (currentStatus string, err error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE orders SET status = ? WHERE order_id = ? AND status = 'PENDING'`,
+		newStatus, orderID)
 	if err != nil {
-		return fmt.Errorf("store: update status: %w", err)
+		return "", fmt.Errorf("store: update status if pending: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("store: update status rows affected: %w", err)
+		return "", fmt.Errorf("store: update status if pending rows affected: %w", err)
 	}
-	if n == 0 {
-		return ErrNotFound
+	if n == 1 {
+		return newStatus, nil
 	}
-	return nil
+
+	// Didn't apply: either the order doesn't exist, or it's no longer PENDING.
+	// Find out which, and if it exists, what it actually is now.
+	row := s.db.QueryRowContext(ctx, `SELECT status FROM orders WHERE order_id = ?`, orderID)
+	if err := row.Scan(&currentStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("store: select current status: %w", err)
+	}
+	return currentStatus, nil
 }
 
 // GetOrder reads an order and its line items. Returns ErrNotFound if no such order exists.
